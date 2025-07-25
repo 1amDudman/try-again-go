@@ -7,20 +7,46 @@ import (
 	"time"
 )
 
-// DelayTypeFunc defines a function type for calculating delay.
+// DelayTypeFunc defines a function type for calculating retry delays.
+// Implementations receive the current attempt number (0-based), base delay,
+// and maximum delay, then return the actual delay to use for that attempt.
+//
+// Example implementations:
+//   - Fixed delay: always return baseDelay
+//   - Linear backoff: return baseDelay * attempt
+//   - Exponential backoff: return baseDelay * 2^attempt
 type DelayTypeFunc func(attempt int, baseDelay, maxDelay time.Duration) time.Duration
 
-// RetryConfig holds configuration for retry behavior.
+// RetryConfig holds the complete configuration for retry behavior.
+// It encapsulates all retry parameters including attempts, delays, logging,
+// and delay calculation strategy. Use NewRetry() to create instances with
+// sensible defaults and functional options for customization.
 type RetryConfig struct {
-	attempts  int
-	baseDelay time.Duration
-	maxDelay  time.Duration
-	delayType DelayTypeFunc
-	logger    Logger
+	attempts  int           // Number of retry attempts
+	baseDelay time.Duration // Base delay between attempts
+	maxDelay  time.Duration // Maximum delay cap
+	delayType DelayTypeFunc // Delay calculation strategy
+	logger    Logger        // Logger for retry events
 }
 
-// NewRetry creates a new RetryConfig with default
-// values and applies the provided options.
+// NewRetry creates a new RetryConfig with sensible default values and applies
+// the provided functional options. The defaults are designed for common use cases
+// but can be easily customized using the With* option functions.
+//
+// Default configuration:
+//   - 3 retry attempts
+//   - 100ms base delay
+//   - 1s maximum delay
+//   - Fixed delay strategy
+//   - Silent logging (nopLogger)
+//
+// Example:
+//
+//	config := retry.NewRetry(
+//	    retry.WithAttempts(5),
+//	    retry.WithDelay(200*time.Millisecond),
+//	    retry.WithDelayType(retry.ExpBackoffWithJitter()),
+//	)
 func NewRetry(opts ...Option) *RetryConfig {
 	retry := &RetryConfig{
 		attempts:  3,
@@ -37,12 +63,44 @@ func NewRetry(opts ...Option) *RetryConfig {
 	return retry
 }
 
-// RetryFunc is a function type that represents
-// the operation to be retried.
+// RetryFunc defines the signature for operations that can be retried.
+// Currently specialized for operations returning io.ReadCloser (like HTTP responses).
+// The function should return the resource and any error that occurred.
+//
+// Note: Future versions may support generic return types.
+//
+// Example:
+//
+//	retryFunc := func() (io.ReadCloser, error) {
+//	    resp, err := http.Get("https://api.example.com/data")
+//	    if err != nil {
+//	        return nil, err
+//	    }
+//	    return resp.Body, nil
+//	}
 type RetryFunc func() (io.ReadCloser, error)
 
-// Do executes the retry logic with the provided
-// context and retry function.
+// Do executes the retry logic with the provided context and retry function.
+// It attempts the operation up to the configured number of times, with delays
+// between attempts calculated by the configured delay strategy.
+//
+// The method handles:
+//   - Context cancellation (respects ctx.Done())
+//   - Non-retryable errors (marked with NonRetryable())
+//   - Delay calculation and sleeping between attempts
+//   - Comprehensive logging of retry events
+//
+// Returns the successful result or the last error encountered after all
+// attempts have been exhausted.
+//
+// Example:
+//
+//	ctx := context.WithTimeout(context.Background(), 30*time.Second)
+//	result, err := config.Do(ctx, retryFunc)
+//	if err != nil {
+//	    log.Fatal("All retry attempts failed:", err)
+//	}
+//	defer result.Close()
 func (rc *RetryConfig) Do(ctx context.Context, retryFunc RetryFunc) (io.ReadCloser, error) {
 	var lastErr error
 
