@@ -72,19 +72,12 @@ func TestExpBackoffWithJitterUpperBound(t *testing.T) {
 	attempt := 2
 	baseDelay := 100 * time.Millisecond
 	maxDelay := 300 * time.Millisecond
-
 	delayFunc := ExpBackoffWithJitter()
-	expBackoff := baseDelay * (1 << attempt) // 100ms * 4 = 400ms
-	jitterCap := expBackoff / 5              // 400ms / 5 = 80ms
-	expectedMax := expBackoff + jitterCap    // 480ms
-	if expectedMax > maxDelay {
-		expectedMax = maxDelay // 300ms
-	}
 
 	for i := 0; i < 1000; i++ {
 		delay := delayFunc(attempt, baseDelay, maxDelay)
-		if delay > expectedMax {
-			t.Errorf("delay exceeded upper bound: got %v, want <= %v", delay, expectedMax)
+		if delay > maxDelay {
+			t.Errorf("delay exceeded upper bound: got %v, want <= %v", delay, maxDelay)
 		}
 	}
 }
@@ -96,19 +89,13 @@ func TestExpBackoffWithJitterLowerBound(t *testing.T) {
 	attempt := 3
 	baseDelay := 100 * time.Millisecond
 	maxDelay := 1000 * time.Millisecond
-
 	delayFunc := ExpBackoffWithJitter()
-
 	expBackoff := baseDelay * time.Duration(1<<attempt)
-	expectedMin := expBackoff
-	if expectedMin > maxDelay {
-		expectedMin = maxDelay
-	}
 
 	for i := 0; i < 1000; i++ {
 		delay := delayFunc(attempt, baseDelay, maxDelay)
-		if delay < expectedMin {
-			t.Errorf("delay %v is less than expected minimum %v", delay, expectedMin)
+		if delay < expBackoff {
+			t.Errorf("delay %v is less than expected minimum %v", delay, expBackoff)
 		}
 	}
 }
