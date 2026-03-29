@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestDoSuccessCases tests the Do method for scenarios where the retry function
@@ -130,25 +131,120 @@ func TestDoNonRetryableError(t *testing.T) {
 	assertNilResult(t, result)
 }
 
-// TestDoContextCanceled tests the Do method for scenarios where the context is
-// canceled before or during retries. It ensures that context cancellation is
-// respected and the appropriate error is returned.
-func TestDoContextCanceled(t *testing.T) {
-	r := NewRetry()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+// TestDoContextCancelation tests the Do method for scenarios where a
+// context was canceled instantly or during delay. It checks that the error
+// is thrown, the error is correct, and the number of calls.
+func TestDoContextCancelation(t *testing.T) {
+	tests := []struct {
+		name          string
+		configOpts    []Option
+		setupCtx      func() (context.Context, context.CancelFunc)
+		getRetryFunc  func(calls *int, cancel context.CancelFunc) RetryFunc
+		expectedCalls int
+	}{
+		{
+			name:       "Instant cancel",
+			configOpts: nil,
+			setupCtx: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, cancel
+			},
+			getRetryFunc: func(calls *int, cancel context.CancelFunc) RetryFunc {
+				return func() (io.ReadCloser, error) {
+					*calls++
+					return nil, fmt.Errorf("attempt error")
+				}
+			},
+			expectedCalls: 0,
+		},
+		{
+			name:       "Cancel during delay",
+			configOpts: []Option{WithDelay(2 * time.Second)},
+			setupCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			getRetryFunc: func(calls *int, cancel context.CancelFunc) RetryFunc {
+				return func() (io.ReadCloser, error) {
+					*calls++
+					if *calls == 1 {
+						go func() {
+							time.Sleep(100 * time.Millisecond)
+							cancel()
+						}()
+
+						return nil, fmt.Errorf("first attempt fail")
+					}
+
+					return nil, nil
+				}
+			},
+			expectedCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewRetry(tt.configOpts...)
+			ctx, cancel := tt.setupCtx()
+			defer cancel()
+
+			calls := 0
+			retryFunc := tt.getRetryFunc(&calls, cancel)
+
+			result, err := r.Do(ctx, retryFunc)
+			if err == nil {
+				t.Fatalf("expected error due to context cancelation, got nil")
+			}
+
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected context canceled error, got %v", err)
+			}
+
+			if calls != tt.expectedCalls {
+				t.Errorf("expected %d calls, got %d", tt.expectedCalls, calls)
+			}
+
+			assertNilResult(t, result)
+		})
+	}
+}
+
+// mockReadCloser structure is a dependency
+// for TestDoCloseDataOnError fuction.
+type mockReadCloser struct {
+	closed bool
+}
+
+func (m *mockReadCloser) Read(p []byte) (n int, err error) {
+	return 0, io.EOF
+}
+
+func (m *mockReadCloser) Close() error {
+	m.closed = true
+	return nil
+}
+
+// TestDoCloseDataOnError tests the Do method for unexpected
+// resource leaks when an error is returned with data,
+// and data wasn't closed properly.
+func TestDoCloseDataOnError(t *testing.T) {
+	r := NewRetry(WithAttempts(2))
+	ctx := context.Background()
+
+	mockData := &mockReadCloser{}
 
 	retryFunc := func() (io.ReadCloser, error) {
-		return nil, fmt.Errorf("attempt error")
+		return mockData, fmt.Errorf("some tmp error")
 	}
 
 	result, err := r.Do(ctx, retryFunc)
 	if err == nil {
-		t.Fatalf("expected error due to context cancellation, got nil")
+		t.Fatalf("expected error after all attempts failed, got nil")
 	}
 
-	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected context cancellation error, got: %v", err)
+	if !mockData.closed {
+		t.Error("expected data.Close() to be called, but it was not")
 	}
 
 	assertNilResult(t, result)

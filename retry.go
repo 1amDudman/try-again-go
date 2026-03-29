@@ -105,31 +105,45 @@ func (rc *RetryConfig) Do(ctx context.Context, retryFunc RetryFunc) (io.ReadClos
 	var lastErr error
 
 	for attempt := 1; attempt <= rc.attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			rc.logger.Printf("Context cancelled before attempt %d: %v", attempt, err)
+			return nil, fmt.Errorf("context cancelled before attempt %d: %w", attempt, err)
+		}
+
+		data, err := retryFunc()
+		if err == nil {
+			return data, nil
+		}
+
+		lastErr = err
+
+		if data != nil {
+			data.Close()
+		}
+
+		if !isRetryable(err) {
+			rc.logger.Printf("Non-retryable error on attempt %d: %v", attempt, err)
+			return nil, fmt.Errorf("non-retryable error: %w", err)
+		}
+
+		if attempt == rc.attempts {
+			break
+		}
+
+		delay := rc.baseDelay
+		if rc.delayType != nil {
+			delay = rc.delayType(attempt, rc.baseDelay, rc.maxDelay)
+		}
+
+		rc.logger.Printf("Attempt %d failed: %v. Retrying in %v...\n", attempt, err, delay)
+
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			rc.logger.Printf("Retry cancelled by context on attempt %d: %v", attempt, ctx.Err())
-			return nil, ctx.Err()
-		default:
-			data, err := retryFunc()
-			if err == nil {
-				return data, nil
-			}
-
-			if !isRetryable(err) {
-				rc.logger.Printf("Non-retryable error on attempt %d: %v", attempt, err)
-				return nil, fmt.Errorf("non-retryable error: %w", err)
-			}
-
-			if attempt != rc.attempts {
-				delay := rc.baseDelay
-				if rc.delayType != nil {
-					delay = rc.delayType(attempt, rc.baseDelay, rc.maxDelay)
-				}
-				rc.logger.Printf("Attempt %d failed: %v. Retrying in %v...\n", attempt, err, delay)
-				time.Sleep(delay)
-			} else {
-				lastErr = err
-			}
+			return nil, fmt.Errorf("retry cancelled by context on attempt %d: %w", attempt, ctx.Err())
+		case <-timer.C:
 		}
 	}
 
