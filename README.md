@@ -2,11 +2,10 @@
 
 A simple and flexible retry library for Go operations.
 
-> **Note**: Currently, this library is designed specifically for operations that return `io.ReadCloser` which comes from resp.Body. Support for generic return types is planned for future versions.
-
 ## Features
 
 - 🔄 Configurable number of retry attempts
+- 🧩 Type-safe Generics: Works with any type T effortlessly. No interface casting, no reflection
 - ⏱️ Flexible delay strategies (fixed, exponential backoff with jitter)
 - 🎯 Smart retryable error detection
 - 🚫 Context cancellation support
@@ -27,34 +26,33 @@ package main
 import (
     "context"
     "fmt"
-    "io"
     "net/http"
     "time"
 
-    "github.com/1amDudman/try-again-go"
+    retry "github.com/1amDudman/try-again-go"
 )
 
 func main() {
     // Create retry config with default settings
     retryConfig := retry.NewRetry()
 
-    // Function to retry - must return (io.ReadCloser, error)
-    retryFunc := func() (io.ReadCloser, error) {
+    // Function to retry
+    retryFunc := func() (string, error) {
         resp, err := http.Get("https://example.com")
         if err != nil {
-            return nil, err
+            return "", err
         }
-        return resp.Body, nil
+
+        return "success", nil
     }
 
     // Execute with retries
     ctx := context.Background()
-    result, err := retryConfig.Do(ctx, retryFunc)
+    result, err := retry.Do(ctx, retryConfig, retryFunc)
     if err != nil {
         fmt.Printf("All attempts failed: %v\n", err)
         return
     }
-    defer result.Close()
 
     fmt.Println("Success!")
 }
@@ -62,7 +60,7 @@ func main() {
 
 ## Configuration
 
-> **Important**: All retry functions must have the signature `func() (io.ReadCloser, error)`. This is the current implementation limitation.
+> **Important**: The library uses Go Generics. Your retry function can return any type T using the signature func() (T, error).
 
 ### Basic Parameters
 
@@ -109,9 +107,9 @@ retryConfig := retry.NewRetry(
 Some errors should not be retried. Use `NonRetryable`:
 
 ```go
-func riskyOperation() (io.ReadCloser, error) {
+func riskyOperation() (string, error) {
     if someCondition {
-        return nil, retry.NonRetryable(errors.New("critical error"))
+        return "", retry.NonRetryable(errors.New("critical error"))
     }
     // ...
 }
@@ -131,7 +129,7 @@ Use context to cancel operations:
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-result, err := retryConfig.Do(ctx, retryFunc)
+result, err := retry.Do(ctx, retryConfig, retryFunc)
 ```
 
 ## Default Settings

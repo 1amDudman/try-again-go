@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"strings"
 	"testing"
 	"time"
 )
@@ -16,27 +14,27 @@ import (
 func TestDoSuccessCases(t *testing.T) {
 	testCases := []struct {
 		name          string
-		retryFunc     func(calls *int) (io.ReadCloser, error)
+		retryFunc     func(calls *int) (string, error)
 		expectedCalls int
 		expectedData  string
 	}{
 		{
 			name: "First Try Success",
-			retryFunc: func(calls *int) (io.ReadCloser, error) {
+			retryFunc: func(calls *int) (string, error) {
 				*calls++
-				return io.NopCloser(strings.NewReader("success")), nil
+				return "success", nil
 			},
 			expectedCalls: 1,
 			expectedData:  "success",
 		},
 		{
 			name: "Success After First Try Failure",
-			retryFunc: func(calls *int) (io.ReadCloser, error) {
+			retryFunc: func(calls *int) (string, error) {
 				*calls++
 				if *calls == 1 {
-					return nil, fmt.Errorf("first attempt error")
+					return "", fmt.Errorf("first attempt error")
 				}
-				return io.NopCloser(strings.NewReader("success")), nil
+				return "success", nil
 			},
 			expectedCalls: 2,
 			expectedData:  "success",
@@ -45,12 +43,12 @@ func TestDoSuccessCases(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := NewRetry()
+			rc := NewRetry()
 			ctx := context.Background()
 			calls := 0
 
 			var firstAttemptErr error
-			wrappedRetryFunc := func() (io.ReadCloser, error) {
+			fn := func() (string, error) {
 				result, err := tc.retryFunc(&calls)
 				if calls == 1 {
 					firstAttemptErr = err
@@ -58,16 +56,10 @@ func TestDoSuccessCases(t *testing.T) {
 				return result, err
 			}
 
-			result, err := r.Do(ctx, wrappedRetryFunc)
+			result, err := Do(ctx, rc, fn)
 			if err != nil {
 				t.Fatalf("expected no error, got %v", err)
 			}
-
-			defer func() {
-				if err := result.Close(); err != nil {
-					t.Fatalf("error closing result: %v", err)
-				}
-			}()
 
 			if tc.expectedCalls > 1 && firstAttemptErr == nil {
 				t.Error("expected first attempt to fail, but it didn't")
@@ -77,49 +69,46 @@ func TestDoSuccessCases(t *testing.T) {
 				t.Fatalf("expected %d call(s), got %d", tc.expectedCalls, calls)
 			}
 
-			data, err := io.ReadAll(result)
-			if err != nil {
-				t.Fatalf("error reading result: %v", err)
-			}
-
-			if string(data) != tc.expectedData {
-				t.Fatalf("expected '%s', got '%s'", tc.expectedData, data)
+			if result != tc.expectedData {
+				t.Fatalf("expected '%s', got '%s'", tc.expectedData, result)
 			}
 		})
 	}
 }
 
 // TestDoAllAttemptsFailed tests the Do method for scenarios where all retry
-// attempts fail. It verifies that an error is returned and the result is nil
+// attempts fail. It verifies that an error is returned and the result is empty
 // when all attempts are unsuccessful.
 func TestDoAllAttemptsFailed(t *testing.T) {
-	r := NewRetry()
+	rc := NewRetry()
 	ctx := context.Background()
 
-	retryFunc := func() (io.ReadCloser, error) {
-		return nil, fmt.Errorf("attempt error")
+	fn := func() (string, error) {
+		return "", fmt.Errorf("attempt error")
 	}
 
-	result, err := r.Do(ctx, retryFunc)
+	result, err := Do(ctx, rc, fn)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
 
-	assertNilResult(t, result)
+	if result != "" {
+		t.Fatalf("expected nothing, got '%s'", result)
+	}
 }
 
 // TestDoNonRetryableError tests the Do method for scenarios where a
 // non-retryable error is returned. It checks that the error is correctly
-// identified as non-retryable and the result is nil.
+// identified as non-retryable and the result is empty.
 func TestDoNonRetryableError(t *testing.T) {
-	r := NewRetry()
+	rc := NewRetry()
 	ctx := context.Background()
 
-	retryFunc := func() (io.ReadCloser, error) {
-		return nil, NonRetryable(fmt.Errorf("critical error"))
+	fn := func() (string, error) {
+		return "", NonRetryable(fmt.Errorf("critical error"))
 	}
 
-	result, err := r.Do(ctx, retryFunc)
+	result, err := Do(ctx, rc, fn)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -128,7 +117,9 @@ func TestDoNonRetryableError(t *testing.T) {
 		t.Fatalf("expected non-retryable error, got: %v", err)
 	}
 
-	assertNilResult(t, result)
+	if result != "" {
+		t.Fatalf("expected nothing, got '%s'", result)
+	}
 }
 
 // TestDoContextCancelation tests the Do method for scenarios where a
@@ -139,7 +130,7 @@ func TestDoContextCancelation(t *testing.T) {
 		name          string
 		configOpts    []Option
 		setupCtx      func() (context.Context, context.CancelFunc)
-		getRetryFunc  func(calls *int, cancel context.CancelFunc) RetryFunc
+		getRetryFunc  func(calls *int, cancel context.CancelFunc) RetryFunc[string]
 		expectedCalls int
 	}{
 		{
@@ -150,10 +141,10 @@ func TestDoContextCancelation(t *testing.T) {
 				cancel()
 				return ctx, cancel
 			},
-			getRetryFunc: func(calls *int, cancel context.CancelFunc) RetryFunc {
-				return func() (io.ReadCloser, error) {
+			getRetryFunc: func(calls *int, cancel context.CancelFunc) RetryFunc[string] {
+				return func() (string, error) {
 					*calls++
-					return nil, fmt.Errorf("attempt error")
+					return "", fmt.Errorf("attempt error")
 				}
 			},
 			expectedCalls: 0,
@@ -164,8 +155,8 @@ func TestDoContextCancelation(t *testing.T) {
 			setupCtx: func() (context.Context, context.CancelFunc) {
 				return context.WithCancel(context.Background())
 			},
-			getRetryFunc: func(calls *int, cancel context.CancelFunc) RetryFunc {
-				return func() (io.ReadCloser, error) {
+			getRetryFunc: func(calls *int, cancel context.CancelFunc) RetryFunc[string] {
+				return func() (string, error) {
 					*calls++
 					if *calls == 1 {
 						go func() {
@@ -173,10 +164,10 @@ func TestDoContextCancelation(t *testing.T) {
 							cancel()
 						}()
 
-						return nil, fmt.Errorf("first attempt fail")
+						return "", fmt.Errorf("first attempt fail")
 					}
 
-					return nil, nil
+					return "", nil
 				}
 			},
 			expectedCalls: 1,
@@ -185,14 +176,14 @@ func TestDoContextCancelation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := NewRetry(tt.configOpts...)
+			rc := NewRetry(tt.configOpts...)
 			ctx, cancel := tt.setupCtx()
 			defer cancel()
 
 			calls := 0
-			retryFunc := tt.getRetryFunc(&calls, cancel)
+			fn := tt.getRetryFunc(&calls, cancel)
 
-			result, err := r.Do(ctx, retryFunc)
+			result, err := Do(ctx, rc, fn)
 			if err == nil {
 				t.Fatalf("expected error due to context cancelation, got nil")
 			}
@@ -205,57 +196,9 @@ func TestDoContextCancelation(t *testing.T) {
 				t.Errorf("expected %d calls, got %d", tt.expectedCalls, calls)
 			}
 
-			assertNilResult(t, result)
+			if result != "" {
+				t.Fatalf("expected nothing, got '%s'", result)
+			}
 		})
-	}
-}
-
-// mockReadCloser structure is a dependency
-// for TestDoCloseDataOnError fuction.
-type mockReadCloser struct {
-	closed bool
-}
-
-func (m *mockReadCloser) Read(p []byte) (n int, err error) {
-	return 0, io.EOF
-}
-
-func (m *mockReadCloser) Close() error {
-	m.closed = true
-	return nil
-}
-
-// TestDoCloseDataOnError tests the Do method for unexpected
-// resource leaks when an error is returned with data,
-// and data wasn't closed properly.
-func TestDoCloseDataOnError(t *testing.T) {
-	r := NewRetry(WithAttempts(2))
-	ctx := context.Background()
-
-	mockData := &mockReadCloser{}
-
-	retryFunc := func() (io.ReadCloser, error) {
-		return mockData, fmt.Errorf("some tmp error")
-	}
-
-	result, err := r.Do(ctx, retryFunc)
-	if err == nil {
-		t.Fatalf("expected error after all attempts failed, got nil")
-	}
-
-	if !mockData.closed {
-		t.Error("expected data.Close() to be called, but it was not")
-	}
-
-	assertNilResult(t, result)
-}
-
-// assertNilResult is a helper function to assert that the result is nil and
-// handle closing if not. It fails the test if the result is not nil.
-func assertNilResult(t *testing.T, result io.ReadCloser) {
-	t.Helper()
-	if result != nil {
-		defer result.Close()
-		t.Fatalf("expected result to be nil on error, got non-nil")
 	}
 }
