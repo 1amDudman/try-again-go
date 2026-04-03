@@ -3,7 +3,6 @@ package retry
 import (
 	"context"
 	"fmt"
-	"io"
 	"time"
 )
 
@@ -60,25 +59,33 @@ func NewRetry(opts ...Option) *RetryConfig {
 		opt(retry)
 	}
 
+	// maxDelay validation in case a client forgot to set maxDelay
+	// with baseDelay or set it less than baseDelay
+	if retry.maxDelay < retry.baseDelay {
+		retry.maxDelay = retry.baseDelay
+	}
+
 	return retry
 }
 
 // RetryFunc defines the signature for operations that can be retried.
-// Currently specialized for operations returning io.ReadCloser (like HTTP responses).
 // The function should return the resource and any error that occurred.
 //
-// Note: Future versions may support generic return types.
 //
 // Example:
-//
-//	retryFunc := func() (io.ReadCloser, error) {
+
+// Be careful, the "string" is for reference here, you have to
+// replace with your specific type.
+//	retryFunc := func() (string, error) {
 //	    resp, err := http.Get("https://api.example.com/data")
 //	    if err != nil {
-//	        return nil, err
+//	        return "", err
 //	    }
-//	    return resp.Body, nil
+//		defer resp.Body.Close()
+
+//	    return "success", nil
 //	}
-type RetryFunc func() (io.ReadCloser, error)
+type RetryFunc[T any] func() (T, error)
 
 // Do executes the retry logic with the provided context and retry function.
 // It attempts the operation up to the configured number of times, with delays
@@ -96,34 +103,30 @@ type RetryFunc func() (io.ReadCloser, error)
 // Example:
 //
 //	ctx := context.WithTimeout(context.Background(), 30*time.Second)
-//	result, err := config.Do(ctx, retryFunc)
+//	result, err := Do(ctx, config, retryFunc)
 //	if err != nil {
 //	    log.Fatal("All retry attempts failed:", err)
 //	}
-//	defer result.Close()
-func (rc *RetryConfig) Do(ctx context.Context, retryFunc RetryFunc) (io.ReadCloser, error) {
+func Do[T any](ctx context.Context, rc *RetryConfig, fn RetryFunc[T]) (T, error) {
+	var zero T
 	var lastErr error
 
 	for attempt := 1; attempt <= rc.attempts; attempt++ {
 		if err := ctx.Err(); err != nil {
-			rc.logger.Printf("Context cancelled before attempt %d: %v", attempt, err)
-			return nil, fmt.Errorf("context cancelled before attempt %d: %w", attempt, err)
+			rc.logger.Printf("Context canceled before attempt %d: %v", attempt, err)
+			return zero, fmt.Errorf("context canceled before attempt %d: %w", attempt, err)
 		}
 
-		data, err := retryFunc()
+		data, err := fn()
 		if err == nil {
 			return data, nil
 		}
 
 		lastErr = err
 
-		if data != nil {
-			data.Close()
-		}
-
 		if !isRetryable(err) {
 			rc.logger.Printf("Non-retryable error on attempt %d: %v", attempt, err)
-			return nil, fmt.Errorf("non-retryable error: %w", err)
+			return zero, fmt.Errorf("non-retryable error: %w", err)
 		}
 
 		if attempt == rc.attempts {
@@ -141,12 +144,12 @@ func (rc *RetryConfig) Do(ctx context.Context, retryFunc RetryFunc) (io.ReadClos
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			rc.logger.Printf("Retry cancelled by context on attempt %d: %v", attempt, ctx.Err())
-			return nil, fmt.Errorf("retry cancelled by context on attempt %d: %w", attempt, ctx.Err())
+			rc.logger.Printf("Retry canceled by context on attempt %d: %v", attempt, ctx.Err())
+			return zero, fmt.Errorf("retry canceled by context on attempt %d: %w", attempt, ctx.Err())
 		case <-timer.C:
 		}
 	}
 
 	rc.logger.Printf("All %d attempts failed. Last error: %v", rc.attempts, lastErr)
-	return nil, fmt.Errorf("all attempts failed, the last error: %w", lastErr)
+	return zero, fmt.Errorf("all attempts failed, the last error: %w", lastErr)
 }
