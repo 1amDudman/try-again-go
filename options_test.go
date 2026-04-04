@@ -10,6 +10,7 @@ import (
 // the number of retry attempts in RetryConfig.
 func TestWithAttempts(t *testing.T) {
 	r := NewRetry(WithAttempts(5))
+
 	if r.attempts != 5 {
 		t.Errorf("expected attempts to be 5, got %d", r.attempts)
 	}
@@ -19,6 +20,7 @@ func TestWithAttempts(t *testing.T) {
 // the base delay duration in RetryConfig.
 func TestWithDelay(t *testing.T) {
 	r := NewRetry(WithDelay(11 * time.Second))
+
 	if r.baseDelay != 11*time.Second {
 		t.Errorf("expected baseDelay to be 11 seconds, got %v", r.baseDelay)
 	}
@@ -28,6 +30,7 @@ func TestWithDelay(t *testing.T) {
 // the maximum delay duration in RetryConfig.
 func TestWithMaxDelay(t *testing.T) {
 	r := NewRetry(WithMaxDelay(20 * time.Second))
+
 	if r.maxDelay != 20*time.Second {
 		t.Errorf("expected maxDelay to be 20 seconds, got %v", r.maxDelay)
 	}
@@ -38,6 +41,7 @@ func TestWithMaxDelay(t *testing.T) {
 func TestWithDelayType(t *testing.T) {
 	customDelayFunc := func(int, time.Duration, time.Duration) time.Duration { return 123 }
 	r := NewRetry(WithDelayType(customDelayFunc))
+
 	if r.delayType(0, 0, 0) != 123 {
 		t.Errorf("expected delayType to return 123")
 	}
@@ -48,6 +52,7 @@ func TestWithDelayType(t *testing.T) {
 func TestWithLogger(t *testing.T) {
 	logger := log.Default()
 	r := NewRetry(WithLogger(logger))
+
 	if r.logger != logger {
 		t.Errorf("expected logger to be set, got %v", r.logger)
 	}
@@ -60,8 +65,10 @@ func TestFixedDelay(t *testing.T) {
 	baseDelay := 10 * time.Second
 	maxDelay := 3 * time.Second
 	delayFunc := FixedDelay()
-	if delayFunc(attempt, baseDelay, maxDelay) != 10*time.Second {
-		t.Errorf("expected fixed delay to return baseDelay, got %v", delayFunc(5, 10*time.Second, 3*time.Second))
+
+	delay := delayFunc(attempt, baseDelay, maxDelay)
+	if delay != baseDelay {
+		t.Errorf("expected fixed delay to return baseDelay, got %v", delay)
 	}
 }
 
@@ -90,12 +97,57 @@ func TestExpBackoffWithJitterLowerBound(t *testing.T) {
 	baseDelay := 100 * time.Millisecond
 	maxDelay := 1000 * time.Millisecond
 	delayFunc := ExpBackoffWithJitter()
-	expBackoff := baseDelay * time.Duration(1<<attempt)
+	expBackoff := baseDelay * time.Duration(1<<(attempt-1))
 
 	for i := 0; i < 1000; i++ {
 		delay := delayFunc(attempt, baseDelay, maxDelay)
 		if delay < expBackoff {
 			t.Errorf("delay %v is less than expected minimum %v", delay, expBackoff)
 		}
+	}
+}
+
+// TestExpBackoffWithJitter_EdgeCases verifies that the delay calculation
+// correctly handles boundary conditions, such as the initial attempt floor (0)
+// and the maximum delay cap.
+func TestExpBackoffWithJitter_EdgeCases(t *testing.T) {
+	delayFunc := ExpBackoffWithJitter()
+
+	testCases := []struct {
+		name        string
+		attempt     int
+		baseDelay   time.Duration
+		maxDelay    time.Duration
+		minExpected time.Duration
+		maxExpected time.Duration
+	}{
+		{
+			name:        "bitwise shift floor (attempt 0)",
+			attempt:     0,
+			baseDelay:   100 * time.Millisecond,
+			maxDelay:    1000 * time.Millisecond,
+			minExpected: 100 * time.Millisecond,
+			maxExpected: 120 * time.Millisecond,
+		},
+		{
+			name:        "finalDelay > maxDelay cap",
+			attempt:     5,
+			baseDelay:   100 * time.Millisecond,
+			maxDelay:    200 * time.Millisecond,
+			minExpected: 200 * time.Millisecond,
+			maxExpected: 200 * time.Millisecond,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			delay := delayFunc(tc.attempt, tc.baseDelay, tc.maxDelay)
+
+			if delay < tc.minExpected || delay > tc.maxExpected {
+				t.Errorf("expected delay between %v and %v, got %v",
+					tc.minExpected, tc.maxExpected, delay)
+			}
+		})
 	}
 }

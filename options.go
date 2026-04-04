@@ -1,7 +1,7 @@
 package retry
 
 import (
-	"math/rand"
+	rand "math/rand/v2"
 	"time"
 )
 
@@ -16,7 +16,7 @@ type Option func(*RetryConfig)
 //
 // Example:
 //
-//	retry.NewRetry(retry.WithAttempts(5)) // Will try 5 times total
+//	retry.NewRetry(retry.WithAttempts(5))
 func WithAttempts(attempts int) Option {
 	return func(rc *RetryConfig) {
 		rc.attempts = attempts
@@ -93,7 +93,7 @@ func FixedDelay() DelayTypeFunc {
 // previous attempt, with random jitter added to prevent thundering herd problems.
 //
 // The algorithm works as follows:
-//   - Calculate exponential backoff: baseDelay * 2^attempt
+//   - Calculate exponential backoff: baseDelay * 2^(attempt-1)
 //   - Add random jitter: 0 to 20% of the exponential delay
 //   - Cap the result at maxDelay to prevent infinite growth
 //
@@ -101,14 +101,24 @@ func FixedDelay() DelayTypeFunc {
 // good balance between quick recovery and system protection.
 //
 // Example delays with baseDelay=100ms:
-//   - attempt 0: ~100-120ms
-//   - attempt 1: ~200-240ms
-//   - attempt 2: ~400-480ms
-//   - attempt 3: limited by maxDelay
+//   - attempt 1: ~100-120ms
+//   - attempt 2: ~200-240ms
+//   - attempt 3: ~400-480ms
+//   - attempt 4: limited by maxDelay
 func ExpBackoffWithJitter() DelayTypeFunc {
 	return func(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
-		expBackoff := baseDelay * time.Duration(1<<attempt)
-		jitter := time.Duration(rand.Int63n(int64(expBackoff) / 5))
+		shift := attempt - 1
+		if shift < 0 {
+			shift = 0
+		}
+
+		expBackoff := baseDelay * time.Duration(1<<shift)
+
+		jitterMax := expBackoff / 5
+		var jitter time.Duration
+		if jitterMax > 0 {
+			jitter = time.Duration(rand.N(jitterMax))
+		}
 
 		finalDelay := expBackoff + jitter
 		if finalDelay > maxDelay {
