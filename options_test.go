@@ -111,6 +111,7 @@ func TestExpBackoffWithJitterLowerBound(t *testing.T) {
 // correctly handles boundary conditions, such as the initial attempt floor (0)
 // and the maximum delay cap.
 func TestExpBackoffWithJitter_EdgeCases(t *testing.T) {
+	t.Parallel()
 	delayFunc := ExpBackoffWithJitter()
 
 	testCases := []struct {
