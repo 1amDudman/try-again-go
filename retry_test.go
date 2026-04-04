@@ -12,6 +12,8 @@ import (
 // eventually succeeds. It covers cases where the first attempt succeeds and
 // where a retry is needed before success.
 func TestDoSuccessCases(t *testing.T) {
+	t.Parallel()
+
 	testCases := []struct {
 		name          string
 		retryFunc     func(calls *int) (string, error)
@@ -43,6 +45,7 @@ func TestDoSuccessCases(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			rc := NewRetry()
 			ctx := context.Background()
 			calls := 0
@@ -80,6 +83,7 @@ func TestDoSuccessCases(t *testing.T) {
 // attempts fail. It verifies that an error is returned and the result is empty
 // when all attempts are unsuccessful.
 func TestDoAllAttemptsFailed(t *testing.T) {
+	t.Parallel()
 	rc := NewRetry()
 	ctx := context.Background()
 
@@ -101,6 +105,7 @@ func TestDoAllAttemptsFailed(t *testing.T) {
 // non-retryable error is returned. It checks that the error is correctly
 // identified as non-retryable and the result is empty.
 func TestDoNonRetryableError(t *testing.T) {
+	t.Parallel()
 	rc := NewRetry()
 	ctx := context.Background()
 
@@ -126,7 +131,8 @@ func TestDoNonRetryableError(t *testing.T) {
 // context was canceled instantly or during delay. It checks that the error
 // is thrown, the error is correct, and the number of calls.
 func TestDoContextCancelation(t *testing.T) {
-	tests := []struct {
+	t.Parallel()
+	testCases := []struct {
 		name          string
 		configOpts    []Option
 		setupCtx      func() (context.Context, context.CancelFunc)
@@ -174,14 +180,15 @@ func TestDoContextCancelation(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rc := NewRetry(tt.configOpts...)
-			ctx, cancel := tt.setupCtx()
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rc := NewRetry(tc.configOpts...)
+			ctx, cancel := tc.setupCtx()
 			defer cancel()
 
 			calls := 0
-			fn := tt.getRetryFunc(&calls, cancel)
+			fn := tc.getRetryFunc(&calls, cancel)
 
 			result, err := Do(ctx, rc, fn)
 			if err == nil {
@@ -192,8 +199,8 @@ func TestDoContextCancelation(t *testing.T) {
 				t.Fatalf("expected context canceled error, got %v", err)
 			}
 
-			if calls != tt.expectedCalls {
-				t.Errorf("expected %d calls, got %d", tt.expectedCalls, calls)
+			if calls != tc.expectedCalls {
+				t.Errorf("expected %d calls, got %d", tc.expectedCalls, calls)
 			}
 
 			if result != "" {
