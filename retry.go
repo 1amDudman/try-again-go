@@ -16,6 +16,10 @@ import (
 //   - Exponential backoff: return baseDelay * 2^attempt
 type DelayTypeFunc func(attempt int, baseDelay, maxDelay time.Duration) time.Duration
 
+// OnRetryFunc defines a signature for a lifecycle hook
+// executed after a failed attempt, right before the delay.
+type OnRetryFunc func(attempt int, err error, delay time.Duration)
+
 // RetryConfig holds the complete configuration for retry behavior.
 // It encapsulates all retry parameters including attempts, delays, logging,
 // and delay calculation strategy. Use NewRetry() to create instances with
@@ -26,6 +30,7 @@ type RetryConfig struct {
 	maxDelay  time.Duration // Maximum delay cap
 	delayType DelayTypeFunc // Delay calculation strategy
 	logger    Logger        // Logger for retry events
+	onRetry   OnRetryFunc   // TODO
 }
 
 // NewRetry creates a new RetryConfig with sensible default values and applies
@@ -53,6 +58,7 @@ func NewRetry(opts ...Option) *RetryConfig {
 		maxDelay:  1 * time.Second,
 		delayType: FixedDelay(),
 		logger:    nopLogger{},
+		onRetry:   func(attempt int, err error, delay time.Duration) {},
 	}
 
 	for _, opt := range opts {
@@ -137,6 +143,8 @@ func Do[T any](ctx context.Context, rc *RetryConfig, fn RetryFunc[T]) (T, error)
 		if rc.delayType != nil {
 			delay = rc.delayType(attempt, rc.baseDelay, rc.maxDelay)
 		}
+
+		rc.onRetry(attempt, err, delay)
 
 		rc.logger.Printf("Attempt %d failed: %v. Retrying in %v...\n", attempt, err, delay)
 
