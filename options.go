@@ -76,6 +76,26 @@ func WithLogger(logger Logger) Option {
 	}
 }
 
+// WithOnRetry sets a hook for retry operations especially for metrics. The onRetry will
+// receive detailed information about retry attempts, failures, and timing.
+// Use this to integrate retry hook with your application's metrics system.
+//
+// Example:
+//
+// retry.NewRetry(
+//
+//	retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
+//	    metrics.IncRetryCount(err.Error())
+//	    metrics.AddSleepTime(delay.Seconds())
+//	}),
+//
+// )
+func WithOnRetry(fn OnRetryFunc) Option {
+	return func(c *RetryConfig) {
+		c.onRetry = fn
+	}
+}
+
 // FixedDelay returns a DelayTypeFunc that uses a constant delay between
 // retry attempts. The delay remains the same regardless of attempt number,
 // providing predictable and consistent retry timing.

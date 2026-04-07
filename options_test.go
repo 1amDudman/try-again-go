@@ -58,6 +58,22 @@ func TestWithLogger(t *testing.T) {
 	}
 }
 
+// TestWithOnRetry ensures that WithOnRetry options is executed.
+func TestWithOnRetry(t *testing.T) {
+	hookCalled := false
+	customHook := func(attempt int, err error, delay time.Duration) {
+		hookCalled = true
+	}
+
+	r := NewRetry(WithOnRetry(customHook))
+
+	r.onRetry(1, nil, 0)
+
+	if !hookCalled {
+		t.Errorf("expected onRetry hook to be executed and set hookCalled to true")
+	}
+}
+
 // TestFixedDelay verifies that FixedDelay function returns a DelayTypeFunc
 // that always returns the base delay regardless of attempt number.
 func TestFixedDelay(t *testing.T) {

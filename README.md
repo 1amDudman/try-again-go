@@ -10,6 +10,7 @@ A simple and flexible retry library for Go operations.
 - 🎯 Smart retryable error detection
 - 🚫 Context cancellation support
 - 📝 Customizable logging
+- 📊 Observability: Lifecycle hooks for metrics and monitoring
 - 🏗️ Simple and clean API
 
 ## Installation
@@ -71,6 +72,25 @@ retryConfig := retry.NewRetry(
     retry.WithMaxDelay(5*time.Second),                       // max delay 5s
     retry.WithDelayType(retry.ExpBackoffWithJitter()),       // exponential backoff with jitter
     retry.WithLogger(customLogger),                          // custom logger
+    retry.WithOnRetry(metricsHook),                          // metrics collection hook
+)
+```
+
+### Observability & Metrics
+
+If you need to track retry behavior without parsing
+text logs (e.g., for Prometheus or Datadog), use the OnRetry hook.
+It executes after a failed attempt, right before the system "sleeps".
+This is perfect for monitoring the stability of external services,
+such as third-party APIs or client data synchronizations.
+
+```go
+retryConfig := retry.NewRetry(
+    retry.WithOnRetry(func(attempt int, err error, delay time.Duration) {
+        // Clean metric collection without log parsing
+        metrics.IncRetryCount(err.Error())
+        metrics.AddSleepTime(delay.Seconds()) 
+    }),
 )
 ```
 
@@ -139,6 +159,7 @@ result, err := retry.Do(ctx, retryConfig, retryFunc)
 - **Max delay**: 1s
 - **Delay strategy**: Fixed
 - **Logger**: No output
+- **OnRetry**: No-op (silent)
 
 ## License
 
